@@ -12,7 +12,11 @@ const port = 3000;
 // Set up multer for file upload
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, 'uploads/');
+        const uploadDir = process.env.VERCEL ? '/tmp' : 'uploads/';
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+        }
+        cb(null, uploadDir);
     },
     filename: (req, file, cb) => {
         cb(null, Date.now() + path.extname(file.originalname));
@@ -24,9 +28,10 @@ const upload = multer({ storage });
 app.use(express.static('public'));
 app.use(express.json());
 
-// Ensure uploads directory exists
-if (!fs.existsSync('uploads/')) {
-    fs.mkdirSync('uploads/');
+// Ensure uploads directory exists (for local dev)
+const uploadsDir = process.env.VERCEL ? '/tmp' : 'uploads/';
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
 function parseTransaction(remarks) {
@@ -122,7 +127,8 @@ function parseTransaction(remarks) {
 app.post('/upload', upload.single('file'), (req, res) => {
     const filePath = req.file.path;
     const ext = path.extname(req.file.originalname).toLowerCase();
-    const processedPath = path.join('uploads', 'processed' + Date.now() + ext);
+    const processedDir = process.env.VERCEL ? '/tmp' : 'uploads';
+    const processedPath = path.join(processedDir, 'processed' + Date.now() + ext);
 
     if (ext === '.xlsx') {
         const workbook = xlsx.readFile(filePath);

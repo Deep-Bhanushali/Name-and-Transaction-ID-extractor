@@ -28,6 +28,11 @@ const upload = multer({ storage });
 app.use(express.static('public'));
 app.use(express.json());
 
+// Serve index.html at root
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, '../public/index.html'));
+});
+
 // Ensure uploads directory exists (for local dev)
 const uploadsDir = process.env.VERCEL ? '/tmp' : 'uploads/';
 if (!fs.existsSync(uploadsDir)) {
@@ -193,6 +198,4 @@ app.post('/upload', upload.single('file'), (req, res) => {
     }
 });
 
-app.listen(port, () => {
-    console.log(`App listening on http://localhost:${port}`);
-});
+module.exports = app;

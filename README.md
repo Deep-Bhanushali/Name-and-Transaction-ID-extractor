@@ -39,6 +39,8 @@ npm install
 
 ## Usage
 
+### Local Development
+
 1. Start the application:
 ```bash
 npm start
@@ -47,6 +49,40 @@ npm start
 2. Open your browser and go to http://localhost:3000
 3. Upload your CSV or Excel file containing transaction data
 4. The processed file will automatically download with added "Name" and "Transaction ID" columns
+
+### Deployment
+
+#### Vercel Deployment
+
+Yes, you can deploy this app on Vercel. Vercel supports Node.js applications with Express.
+
+**Steps:**
+
+1. Push your code to a Git repository (GitHub, GitLab, etc.)
+2. Connect your repository to Vercel
+3. Create a `vercel.json` file in your project root with the following content:
+
+```json
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "app.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "app.js"
+    }
+  ]
+}
+```
+
+4. Deploy via Vercel dashboard
+
+**Note:** Vercel has file size limits (up to 100MB per request). For larger datasets, consider optimizing or using other hosting platforms like Heroku, Railway, or Render for more persistent server capabilities.
 
 ## File Format
 

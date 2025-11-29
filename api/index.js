@@ -87,7 +87,7 @@ function parseTransaction(remarks) {
     } else if (remark.startsWith('NEFT-')) {
         const parts = remark.split('-').filter(p => p.length > 0);
         const idPart = parts.length > 1 ? parts[1] : '';
-        result['transaction-id'] = idPart.length >= 22 ? `NEFT-${idPart}` : 'UNKNOWN';
+        result['transaction-id'] = (idPart.length === 16 || idPart.length === 18 || idPart.length === 22) ? `NEFT-${idPart}` : 'UNKNOWN';
         result.name = parts.length > 2 ? parts[2] : 'UNKNOWN';
     } else if (remark.startsWith('RTGS-')) {
         const parts = remark.split('-').filter(p => p.length > 0);
@@ -113,8 +113,8 @@ function parseTransaction(remarks) {
         const parts = remark.split('/').filter(p => p.length > 0);
         result.name = parts.length > 4 ? parts[4] : (parts.length > 3 ? parts[3] : 'UNKNOWN');
         const idPart = parts.length > 2 ? parts[2] : '';
-        // INFT, 10 digits EJF...
-        if (/EJF\d{7}/.test(idPart)) {
+        // INFT, 10 digits EKW or EJW...
+        if (/(EKW|EJW)\d{7}/.test(idPart)) {
             result['transaction-id'] = `INFT-${idPart}`;
         } else {
             result['transaction-id'] = 'UNKNOWN';

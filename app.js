@@ -12,6 +12,7 @@ const port = 3000;
 // Set up multer for file upload
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
+        // Use /tmp for Vercel deployment, 'uploads/' for local development
         const uploadDir = process.env.VERCEL ? '/tmp' : 'uploads/';
         if (!fs.existsSync(uploadDir)) {
             fs.mkdirSync(uploadDir, { recursive: true });
@@ -28,28 +29,83 @@ const upload = multer({ storage });
 app.use(express.static('public'));
 app.use(express.json());
 
+// Serve index.html at root (assuming you have a 'public/index.html' file)
+app.get('/', (req, res) => {
+    // This path might need adjustment based on your project structure
+    res.sendFile(path.join(__dirname, '../public/index.html'));
+});
+
 // Ensure uploads directory exists (for local dev)
 const uploadsDir = process.env.VERCEL ? '/tmp' : 'uploads/';
 if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+// Bank and IFSC/VPA keyword list for broader matching
+const bankKeywords = [
+    { name: 'State Bank of India', patterns: [/State Bank|SBI|SBIN\d{7}|@sbi/i] },
+    { name: 'HDFC Bank', patterns: [/HDFC BANK|HDFC|HDF|@hdfc/i] },
+    { name: 'ICICI Bank', patterns: [/ICICI|ICIC|@ybl/i] },
+    { name: 'Axis Bank', patterns: [/Axis Bank|Axis|@apl/i] },
+    { name: 'Kotak Mahindra Bank', patterns: [/Kotak|KMB|Kotak Mahindra/i] },
+    { name: 'Canara Bank', patterns: [/CANARA BANK|Canara|CNRB/i] },
+    { name: 'Punjab National Bank', patterns: [/Punjab Nat|PNB|PNBM|PUNB/i] },
+    { name: 'IDFC FIRST Bank', patterns: [/idfc|IDFC FIRST|@idfc/i] },
+    { name: 'Yes Bank', patterns: [/YES BANK|YESB/i] },
+    { name: 'AU Small Finance Bank', patterns: [/AUBL/i] },
+    { name: 'Bank of Baroda', patterns: [/Baroda|BOB|BARB/i] },
+    { name: 'Indian Bank', patterns: [/INDIAN BANK|IDIB|@ibl/i] },
+    { name: 'Sarvodaya Bank', patterns: [/Sarvodaya/i] },
+    { name: 'Paytm Payments Bank', patterns: [/@paytm|@ptye|@ptax/i] },
+];
+
+// Function to find the bank in a text snippet using defined keywords
+const findBank = (text) => {
+    if (!text) return 'UNKNOWN';
+    for (const bank of bankKeywords) {
+        for (const pattern of bank.patterns) {
+            if (pattern.test(text)) {
+                return bank.name;
+            }
+        }
+    }
+    return 'UNKNOWN';
+};
+
 function parseTransaction(remarks) {
-    const result = { name: '', 'transaction-id': '' };
+    // Initialize with new 'bank' field
+    const result = { name: '', 'transaction-id': '', bank: 'UNKNOWN' };
 
     // Normalize spaces
     const remark = remarks.replace(/\s+/g, ' ').trim();
 
     if (remark.startsWith('CMS/')) {
         result.name = 'UNKNOWN';
+        
+        // --- UPDATED LOGIC FOR CMS/ ---
+        // Find the part containing the underscore
         const parts = remark.split('/');
-        result['transaction-id'] = parts[1] && parts[1].length === 15 ? `CMS-${parts[1]}` : 'UNKNOWN';
+        let cmsIdPart = 'UNKNOWN';
+        
+        for (const part of parts) {
+            if (part.includes('_')) {
+                cmsIdPart = part;
+                break;
+            }
+        }
+        
+        result['transaction-id'] = cmsIdPart !== 'UNKNOWN' ? `CMS-${cmsIdPart}` : 'UNKNOWN';
+        // --- END UPDATED LOGIC ---
+        
+        result.bank = findBank(remark);
+
     } else if (remark.startsWith('UPI/')) {
         const parts = remark.split('/').filter(p => p.length > 0);
         parts.shift(); // remove "UPI"
-        // Find name: the first part with space, no digits, no @, and not common remarks
+        // Existing name extraction logic
         result.name = 'UNKNOWN';
         for (const part of parts) {
+            // Find name: the first part with space, no digits, no @, and not common remarks
             if (part.includes(' ') && !/\d/.test(part) && !part.includes('@')) {
                 const lower = part.toLowerCase().trim();
                 if (!lower.includes('remark') && !lower.includes('fund') && !lower.includes('payment') &&
@@ -66,11 +122,13 @@ function parseTransaction(remarks) {
         if (result.name === 'UNKNOWN') {
             for (const part of parts) {
                 if (part.includes('@')) {
-                    result.name = part.trim();
+                    const vpaParts = part.split('@');
+                    result.name = vpaParts[0].trim();
                     break;
                 }
             }
         }
+
         // ID: find 12 digit number, else last part
         const digit12 = remark.match(/(\d{12})/g);
         if (digit12 && digit12[0].length === 12) {
@@ -79,21 +137,51 @@ function parseTransaction(remarks) {
             const idPart = parts[parts.length - 1];
             result['transaction-id'] = idPart && idPart.length > 10 ? `UPI-${idPart}` : 'UNKNOWN';
         }
+
+        // Bank extraction from VPA handle or other keywords
+        result.bank = findBank(remark);
+
     } else if (remark.startsWith('NEFT-')) {
         const parts = remark.split('-').filter(p => p.length > 0);
         const idPart = parts.length > 1 ? parts[1] : '';
         result['transaction-id'] = (idPart.length === 16 || idPart.length === 18 || idPart.length === 22) ? `NEFT-${idPart}` : 'UNKNOWN';
         result.name = parts.length > 2 ? parts[2] : 'UNKNOWN';
+        
+        // Extract bank from IFSC prefix in the ID (first 4 characters)
+        if(idPart.length >= 4) {
+            const ifscPrefix = idPart.substring(0, 4);
+            result.bank = findBank(ifscPrefix) === 'UNKNOWN' ? findBank(remark) : findBank(ifscPrefix);
+        } else {
+            result.bank = findBank(remark);
+        }
+
     } else if (remark.startsWith('RTGS-')) {
         const parts = remark.split('-').filter(p => p.length > 0);
         const idPart = parts.length > 1 ? parts[1] : '';
         result['transaction-id'] = idPart.length >= 22 ? `RTGS-${idPart}` : 'UNKNOWN';
         result.name = parts.length > 2 ? parts[2] : 'UNKNOWN';
+        
+        // Extract bank from IFSC prefix in the ID (first 4 characters)
+        if(idPart.length >= 4) {
+            const ifscPrefix = idPart.substring(0, 4);
+            result.bank = findBank(ifscPrefix) === 'UNKNOWN' ? findBank(remark) : findBank(ifscPrefix);
+        } else {
+            result.bank = findBank(remark);
+        }
+
     } else if (remark.startsWith('CLG/')) {
         const parts = remark.split('/').filter(p => p.length > 0);
         result.name = parts.length > 1 ? parts[1] : 'UNKNOWN';
         const idPart = parts.length > 2 ? parts[2] : '';
         result['transaction-id'] = idPart.length === 6 ? `CLG-${idPart}` : 'UNKNOWN';
+        
+        // Check for bank code in the 4th part (e.g., HDF, PNB)
+        if (parts.length > 3) {
+            result.bank = findBank(parts[3]) === 'UNKNOWN' ? findBank(remark) : findBank(parts[3]);
+        } else {
+            result.bank = findBank(remark);
+        }
+
     } else if (remark.startsWith('MMT/')) {
         const parts = remark.split('/').filter(p => p.length > 0);
         result.name = parts.length > 4 ? parts[4] : (parts.length > 3 ? parts[3] : 'UNKNOWN');
@@ -104,19 +192,26 @@ function parseTransaction(remarks) {
         } else {
             result['transaction-id'] = 'UNKNOWN';
         }
+        
+        // Look for explicit bank mention at the end of the remark
+        result.bank = findBank(remark.substring(remark.lastIndexOf('/') + 1) || remark);
+
     } else if (remark.startsWith('BIL/')) {
         const parts = remark.split('/').filter(p => p.length > 0);
         result.name = parts.length > 4 ? parts[4] : (parts.length > 3 ? parts[3] : 'UNKNOWN');
         const idPart = parts.length > 2 ? parts[2] : '';
-        // INFT, 10 digits EKW or EJW...
-        if (/(EKW|EJW)\d{7}/.test(idPart)) {
+        // INFT, 10 digits EKW or EJF...
+        if (/(EKW|EJF)\d{7}/.test(idPart)) {
             result['transaction-id'] = `INFT-${idPart}`;
         } else {
             result['transaction-id'] = 'UNKNOWN';
         }
+        result.bank = findBank(remark);
+
     } else {
         result.name = 'UNKNOWN';
         result['transaction-id'] = 'UNKNOWN';
+        result.bank = 'UNKNOWN';
     }
 
     // Clean up names
@@ -134,18 +229,22 @@ app.post('/upload', upload.single('file'), (req, res) => {
         const workbook = xlsx.readFile(filePath);
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
-        const data = xlsx.utils.sheet_to_json(sheet);
+        let data = xlsx.utils.sheet_to_json(sheet);
 
-        data.forEach(row => {
+        // Ensure all rows have a 'Transaction Remarks' column before processing
+        data = data.map(row => {
             const remarks = row['Transaction Remarks'];
             if (remarks) {
                 const extracted = parseTransaction(remarks);
                 row['Name'] = extracted.name;
                 row['Transaction ID'] = extracted['transaction-id'];
+                row['Bank'] = extracted.bank; // Added Bank extraction
             } else {
                 row['Name'] = '';
                 row['Transaction ID'] = '';
+                row['Bank'] = ''; // Added Bank initialization
             }
+            return row;
         });
 
         const newWorkbook = xlsx.utils.book_new();
@@ -171,13 +270,22 @@ app.post('/upload', upload.single('file'), (req, res) => {
                         const extracted = parseTransaction(remarks);
                         row['Name'] = extracted.name;
                         row['Transaction ID'] = extracted['transaction-id'];
+                        row['Bank'] = extracted.bank; // Added Bank extraction
                     } else {
                         row['Name'] = '';
                         row['Transaction ID'] = '';
+                        row['Bank'] = ''; // Added Bank initialization
                     }
                 });
 
-                const header = Object.keys(rows[0] || {}).map(key => ({ id: key, title: key }));
+                // Dynamically build header including the new 'Name', 'Transaction ID', and 'Bank' fields
+                const keys = Object.keys(rows[0] || {});
+                if (!keys.includes('Name')) keys.push('Name');
+                if (!keys.includes('Transaction ID')) keys.push('Transaction ID');
+                if (!keys.includes('Bank')) keys.push('Bank'); // Ensure Bank is in header
+                
+                const header = keys.map(key => ({ id: key, title: key }));
+                
                 const csvWriter = createCsvWriter({
                     path: processedPath,
                     header: header
@@ -185,11 +293,14 @@ app.post('/upload', upload.single('file'), (req, res) => {
 
                 csvWriter.writeRecords(rows).then(() => {
                     fs.unlinkSync(filePath);
-                    res.download(processedPath, 'processed.csv', (err) => {
+                    res.download(processedPath, 'processed.csv', 'Processed Transaction Data.csv', (err) => {
                         if (!err) fs.unlinkSync(processedPath);
                     });
                 });
             });
+    } else {
+         fs.unlinkSync(filePath);
+         res.status(400).send('Unsupported file type. Please upload .xlsx or .csv.');
     }
 });
 

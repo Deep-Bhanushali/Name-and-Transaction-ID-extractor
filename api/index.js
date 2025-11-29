@@ -114,7 +114,7 @@ function parseTransaction(remarks) {
         result.name = parts.length > 4 ? parts[4] : (parts.length > 3 ? parts[3] : 'UNKNOWN');
         const idPart = parts.length > 2 ? parts[2] : '';
         // INFT, 10 digits EKW or EJW...
-        if (/(EKW|EJW)\d{7}/.test(idPart)) {
+        if (/(EKW|EJF)\d{7}/.test(idPart)) {
             result['transaction-id'] = `INFT-${idPart}`;
         } else {
             result['transaction-id'] = 'UNKNOWN';

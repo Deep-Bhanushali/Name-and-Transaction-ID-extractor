@@ -26,6 +26,37 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 app.use(express.static('public'));
+// Bank and IFSC/VPA keyword list for broader matching
+const bankKeywords = [
+    { name: 'State Bank of India', patterns: [/State Bank|SBI|SBIN\d{7}|@sbi/i] },
+    { name: 'HDFC Bank', patterns: [/HDFC BANK|HDFC|HDF|@hdfc/i] },
+    { name: 'ICICI Bank', patterns: [/ICICI|ICIC|@ybl/i] },
+    { name: 'Axis Bank', patterns: [/Axis Bank|Axis|@apl/i] },
+    { name: 'Kotak Mahindra Bank', patterns: [/Kotak|KMB|Kotak Mahindra/i] },
+    { name: 'Canara Bank', patterns: [/CANARA BANK|Canara|CNRB/i] },
+    { name: 'Punjab National Bank', patterns: [/Punjab Nat|PNB|PNBM|PUNB/i] },
+    { name: 'IDFC FIRST Bank', patterns: [/idfc|IDFC FIRST|@idfc/i] },
+    { name: 'Yes Bank', patterns: [/YES BANK|YESB/i] },
+    { name: 'AU Small Finance Bank', patterns: [/AUBL/i] },
+    { name: 'Bank of Baroda', patterns: [/Baroda|BOB|BARB/i] },
+    { name: 'Indian Bank', patterns: [/INDIAN BANK|IDIB|@ibl/i] },
+    { name: 'Sarvodaya Bank', patterns: [/Sarvodaya/i] },
+    { name: 'Paytm Payments Bank', patterns: [/@paytm|@ptye|@ptax/i] },
+];
+
+// Function to find the bank in a text snippet using defined keywords
+const findBank = (text) => {
+    if (!text) return 'UNKNOWN';
+    for (const bank of bankKeywords) {
+        for (const pattern of bank.patterns) {
+            if (pattern.test(text)) {
+                return bank.name;
+            }
+        }
+    }
+    return 'UNKNOWN';
+};
+
 app.use(express.json());
 
 // Serve index.html at root
@@ -40,21 +71,39 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 function parseTransaction(remarks) {
-    const result = { name: '', 'transaction-id': '' };
+    // Initialize with new 'bank' field
+    const result = { name: '', 'transaction-id': '', bank: 'UNKNOWN' };
 
     // Normalize spaces
     const remark = remarks.replace(/\s+/g, ' ').trim();
 
     if (remark.startsWith('CMS/')) {
         result.name = 'UNKNOWN';
+        
+        // --- UPDATED LOGIC FOR CMS/ ---
+        // Find the part containing the underscore
         const parts = remark.split('/');
-        result['transaction-id'] = parts[1] && parts[1].length === 15 ? `CMS-${parts[1]}` : 'UNKNOWN';
+        let cmsIdPart = 'UNKNOWN';
+        
+        for (const part of parts) {
+            if (part.includes('_')) {
+                cmsIdPart = part;
+                break;
+            }
+        }
+        
+        result['transaction-id'] = cmsIdPart !== 'UNKNOWN' ? `CMS-${cmsIdPart}` : 'UNKNOWN';
+        // --- END UPDATED LOGIC ---
+        
+        result.bank = findBank(remark);
+
     } else if (remark.startsWith('UPI/')) {
         const parts = remark.split('/').filter(p => p.length > 0);
         parts.shift(); // remove "UPI"
-        // Find name: the first part with space, no digits, no @, and not common remarks
+        // Existing name extraction logic
         result.name = 'UNKNOWN';
         for (const part of parts) {
+            // Find name: the first part with space, no digits, no @, and not common remarks
             if (part.includes(' ') && !/\d/.test(part) && !part.includes('@')) {
                 const lower = part.toLowerCase().trim();
                 if (!lower.includes('remark') && !lower.includes('fund') && !lower.includes('payment') &&
@@ -71,11 +120,13 @@ function parseTransaction(remarks) {
         if (result.name === 'UNKNOWN') {
             for (const part of parts) {
                 if (part.includes('@')) {
-                    result.name = part.trim();
+                    const vpaParts = part.split('@');
+                    result.name = vpaParts[0].trim();
                     break;
                 }
             }
         }
+
         // ID: find 12 digit number, else last part
         const digit12 = remark.match(/(\d{12})/g);
         if (digit12 && digit12[0].length === 12) {
@@ -84,21 +135,51 @@ function parseTransaction(remarks) {
             const idPart = parts[parts.length - 1];
             result['transaction-id'] = idPart && idPart.length > 10 ? `UPI-${idPart}` : 'UNKNOWN';
         }
+
+        // Bank extraction from VPA handle or other keywords
+        result.bank = findBank(remark);
+
     } else if (remark.startsWith('NEFT-')) {
         const parts = remark.split('-').filter(p => p.length > 0);
         const idPart = parts.length > 1 ? parts[1] : '';
         result['transaction-id'] = (idPart.length === 16 || idPart.length === 18 || idPart.length === 22) ? `NEFT-${idPart}` : 'UNKNOWN';
         result.name = parts.length > 2 ? parts[2] : 'UNKNOWN';
+        
+        // Extract bank from IFSC prefix in the ID (first 4 characters)
+        if(idPart.length >= 4) {
+            const ifscPrefix = idPart.substring(0, 4);
+            result.bank = findBank(ifscPrefix) === 'UNKNOWN' ? findBank(remark) : findBank(ifscPrefix);
+        } else {
+            result.bank = findBank(remark);
+        }
+
     } else if (remark.startsWith('RTGS-')) {
         const parts = remark.split('-').filter(p => p.length > 0);
         const idPart = parts.length > 1 ? parts[1] : '';
         result['transaction-id'] = idPart.length >= 22 ? `RTGS-${idPart}` : 'UNKNOWN';
         result.name = parts.length > 2 ? parts[2] : 'UNKNOWN';
+        
+        // Extract bank from IFSC prefix in the ID (first 4 characters)
+        if(idPart.length >= 4) {
+            const ifscPrefix = idPart.substring(0, 4);
+            result.bank = findBank(ifscPrefix) === 'UNKNOWN' ? findBank(remark) : findBank(ifscPrefix);
+        } else {
+            result.bank = findBank(remark);
+        }
+
     } else if (remark.startsWith('CLG/')) {
         const parts = remark.split('/').filter(p => p.length > 0);
         result.name = parts.length > 1 ? parts[1] : 'UNKNOWN';
         const idPart = parts.length > 2 ? parts[2] : '';
         result['transaction-id'] = idPart.length === 6 ? `CLG-${idPart}` : 'UNKNOWN';
+        
+        // Check for bank code in the 4th part (e.g., HDF, PNB)
+        if (parts.length > 3) {
+            result.bank = findBank(parts[3]) === 'UNKNOWN' ? findBank(remark) : findBank(parts[3]);
+        } else {
+            result.bank = findBank(remark);
+        }
+
     } else if (remark.startsWith('MMT/')) {
         const parts = remark.split('/').filter(p => p.length > 0);
         result.name = parts.length > 4 ? parts[4] : (parts.length > 3 ? parts[3] : 'UNKNOWN');
@@ -109,19 +190,26 @@ function parseTransaction(remarks) {
         } else {
             result['transaction-id'] = 'UNKNOWN';
         }
+        
+        // Look for explicit bank mention at the end of the remark
+        result.bank = findBank(remark.substring(remark.lastIndexOf('/') + 1) || remark);
+
     } else if (remark.startsWith('BIL/')) {
         const parts = remark.split('/').filter(p => p.length > 0);
         result.name = parts.length > 4 ? parts[4] : (parts.length > 3 ? parts[3] : 'UNKNOWN');
         const idPart = parts.length > 2 ? parts[2] : '';
-        // INFT, 10 digits EKW or EJW...
+        // INFT, 10 digits EKW or EJF...
         if (/(EKW|EJF)\d{7}/.test(idPart)) {
             result['transaction-id'] = `INFT-${idPart}`;
         } else {
             result['transaction-id'] = 'UNKNOWN';
         }
+        result.bank = findBank(remark);
+
     } else {
         result.name = 'UNKNOWN';
         result['transaction-id'] = 'UNKNOWN';
+        result.bank = 'UNKNOWN';
     }
 
     // Clean up names
@@ -147,9 +235,11 @@ app.post('/upload', upload.single('file'), (req, res) => {
                 const extracted = parseTransaction(remarks);
                 row['Name'] = extracted.name;
                 row['Transaction ID'] = extracted['transaction-id'];
+                row['Bank'] = extracted.bank; // Added Bank extraction
             } else {
                 row['Name'] = '';
                 row['Transaction ID'] = '';
+                row['Bank'] = ''; // Added Bank initialization
             }
         });
 
@@ -176,9 +266,11 @@ app.post('/upload', upload.single('file'), (req, res) => {
                         const extracted = parseTransaction(remarks);
                         row['Name'] = extracted.name;
                         row['Transaction ID'] = extracted['transaction-id'];
+                        row['Bank'] = extracted.bank; // Added Bank extraction
                     } else {
                         row['Name'] = '';
                         row['Transaction ID'] = '';
+                        row['Bank'] = ''; // Added Bank initialization
                     }
                 });
 
